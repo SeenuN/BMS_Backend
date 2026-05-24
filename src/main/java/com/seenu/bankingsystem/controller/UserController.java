@@ -46,15 +46,16 @@ public class UserController {
     }
 
     @PostMapping("/login")
-    public LoginResponse login(@RequestBody LoginRequest request) {
+    public ResponseEntity<LoginResponse> login(@RequestBody LoginRequest request) {
 
         LoginResponse response = new LoginResponse();
 
-        User user = userService.findByEmail(request.getEmail());
-
-        if (user == null) {
-            response.setMessage("User not found");
-            return response;
+        User user;
+        try {
+            user = userService.findByEmail(request.getEmail());
+        } catch (RuntimeException e) {
+            response.setMessage("Invalid username or password");
+            return ResponseEntity.status(404).body(response);
         }
 
         if (passwordEncoder.matches(request.getPassword(), user.getPassword())) {
@@ -71,10 +72,10 @@ public class UserController {
                 response.setAccountNumber(acc.getAccountNumber())
             );
 
-            return response;
+            return ResponseEntity.ok(response);
         }
-        response.setMessage("Invalid password");
-        return response;
+        response.setMessage("Invalid username or password");
+        return ResponseEntity.status(401).body(response);
     }
 
     @PostMapping("/forgot-password")

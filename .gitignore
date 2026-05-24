@@ -17,6 +17,9 @@ target/
 .env
 .env.*
 
+
+src/main/resources/application.properties
+
 ### IntelliJ IDEA ###
 .idea
 *.iws
