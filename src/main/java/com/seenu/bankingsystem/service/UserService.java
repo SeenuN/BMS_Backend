@@ -32,6 +32,9 @@ public class UserService {
     @Autowired
     private EmailService emailService;
 
+    @Autowired
+    private SmsService smsService;
+
     // Register new user
     public User registerUser(User user) {
         user.setPassword(passwordEncoder.encode(user.getPassword()));
@@ -90,6 +93,13 @@ public class UserService {
 
         // Print to console for development testing
         System.out.println("Generated OTP for " + email + " is: " + otp);
+
+        // 📱 Send OTP via SMS service
+        try {
+            smsService.sendOtpSms(user, otp);
+        } catch (Exception e) {
+            System.err.println("Failed to send OTP via SMS: " + e.getMessage());
+        }
 
         try {
             emailService.sendOtpEmail(email, otp);

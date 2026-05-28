@@ -22,6 +22,8 @@ public class Transaction {
 
     private String description;
 
+    private String category;
+
     private LocalDateTime createdAt = LocalDateTime.now();
 
     @Column(unique = true)
@@ -53,6 +55,10 @@ public class Transaction {
         return description;
     }
 
+    public String getCategory() {
+        return category;
+    }
+
     public LocalDateTime getCreatedAt() {
         return createdAt;
     }
@@ -77,6 +83,10 @@ public class Transaction {
 
     public void setDescription(String description) {
         this.description = description;
+    }
+
+    public void setCategory(String category) {
+        this.category = category;
     }
 
 

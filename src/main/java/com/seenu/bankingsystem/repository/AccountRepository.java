@@ -32,6 +32,22 @@ public interface AccountRepository extends JpaRepository<Account, Long> {
     """)
     List<AccountResponse> getAllAccountDetails();
 
+    @Query("""
+        SELECT new com.seenu.bankingsystem.dto.AccountResponse(
+            a.accountNumber,
+            a.accountType,
+            a.balance,
+            a.status,
+            a.createdAt,
+            u.name,
+            a.branch
+        )
+        FROM Account a
+        JOIN User u ON a.userId = u.id
+        WHERE a.userId = :userId
+    """)
+    List<AccountResponse> getAccountDetailsByUserId(Long userId);
+
     // ✅ Lock for updates (transfer, withdraw)
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("SELECT a FROM Account a WHERE a.accountNumber = :accountNumber")

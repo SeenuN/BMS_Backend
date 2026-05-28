@@ -11,11 +11,13 @@ public class TransactionResponse {
     private BigDecimal balanceAfter;
     private String transactionType;
     private String description;
+    private String category;
     private LocalDateTime createdAt;
 
     public TransactionResponse(Long id, String accountNumber,
                                BigDecimal amount, BigDecimal balanceAfter,
                                String transactionType, String description,
+                               String category,
                                LocalDateTime createdAt) {
         this.id = id;
         this.accountNumber = accountNumber;
@@ -23,6 +25,7 @@ public class TransactionResponse {
         this.balanceAfter = balanceAfter;
         this.transactionType = transactionType;
         this.description = description;
+        this.category = category;
         this.createdAt = createdAt;
     }
 
@@ -50,6 +53,10 @@ public class TransactionResponse {
 
     public String getDescription() {
         return description;
+    }
+
+    public String getCategory() {
+        return category;
     }
 
     public LocalDateTime getCreatedAt() {

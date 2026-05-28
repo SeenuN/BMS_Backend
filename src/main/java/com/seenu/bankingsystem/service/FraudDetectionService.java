@@ -10,6 +10,7 @@ import org.springframework.stereotype.Service;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Optional;
 
 @Service
 public class FraudDetectionService {
@@ -33,6 +34,12 @@ public class FraudDetectionService {
 
     @Autowired
     private TransactionRepository transactionRepository;
+
+    @Autowired
+    private SmsService smsService;
+
+    @Autowired
+    private com.seenu.bankingsystem.repository.AccountRepository accountRepository;
 
     // ─────────────────────────────────────────────────────────────────────────
     /**
@@ -83,5 +90,23 @@ public class FraudDetectionService {
         alert.setTransactionAmount(tx.getAmount());
         alert.setStatus("PENDING");
         fraudAlertRepository.save(alert);
+
+        // 📱 Send SMS fraud alert to account holder
+        try {
+            Optional<com.seenu.bankingsystem.entity.Account> accountOpt =
+                    accountRepository.findById(tx.getAccountId());
+            accountOpt.ifPresent(account ->
+                    smsService.sendFraudAlertToUser(
+                            account.getUserId(),
+                            account.getAccountNumber(),
+                            type,
+                            description
+                    )
+            );
+        } catch (Exception e) {
+            // Don't let SMS failure block fraud alert creation
+            org.slf4j.LoggerFactory.getLogger(FraudDetectionService.class)
+                    .warn("Failed to send SMS fraud alert: {}", e.getMessage());
+        }
     }
 }

@@ -15,6 +15,7 @@ import com.seenu.bankingsystem.repository.TransactionRepository;
 import com.seenu.bankingsystem.security.RateLimiterService;
 import com.seenu.bankingsystem.service.FraudDetectionService;
 import com.seenu.bankingsystem.util.RequestUtil;
+import com.seenu.bankingsystem.util.TransactionClassifier;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -50,6 +51,9 @@ public class TransactionService {
     @Autowired
     private FraudDetectionService fraudDetectionService;
 
+    @Autowired
+    private SmsService smsService;
+
     @Transactional
     public String deposit(String accountNumber, BigDecimal amount){
 
@@ -80,6 +84,7 @@ public class TransactionService {
         txn.setAmount(amount);
         txn.setBalanceAfter(account.getBalance());
         txn.setDescription("Deposit");
+        txn.setCategory(TransactionClassifier.classify(txn.getDescription(), txn.getTransactionType()));
 
         transactionRepository.save(txn);
         fraudDetectionService.analyze(txn);   // 🔍 Fraud check
@@ -87,6 +92,10 @@ public class TransactionService {
                 "Deposit Successful",
                 "₹" + amount + " deposited to your account. Balance: ₹" + account.getBalance(),
                 "TRANSACTION");
+
+        // 📱 SMS Alert
+        smsService.sendDepositAlert(account, amount, account.getBalance(), txn.getId());
+
         String ip = RequestUtil.getClientIp();
 
         auditLogService.log(username, "DEPOSIT", "TRANSACTION",
@@ -127,6 +136,7 @@ public class TransactionService {
         txn.setAmount(amount);
         txn.setBalanceAfter(account.getBalance());
         txn.setDescription("Withdraw money");
+        txn.setCategory(TransactionClassifier.classify(txn.getDescription(), txn.getTransactionType()));
 
         transactionRepository.save(txn);
         fraudDetectionService.analyze(txn);   // 🔍 Fraud check
@@ -134,6 +144,10 @@ public class TransactionService {
                 "Withdrawal Successful",
                 "₹" + amount + " withdrawn. Balance: ₹" + account.getBalance(),
                 "TRANSACTION");
+
+        // 📱 SMS Alert
+        smsService.sendWithdrawalAlert(account, amount, account.getBalance(), txn.getId());
+
         String ip = RequestUtil.getClientIp();
         auditLogService.log(username, "WITHDRAW", "TRANSACTION",
                 txn.getId(), "Withdrew ₹" + amount, ip, "SUCCESS");
@@ -223,6 +237,7 @@ public class TransactionService {
         debitTxn.setBalanceAfter(sender.getBalance());
         debitTxn.setDescription("Transfer to " + toAccountNumber);
         debitTxn.setIdempotencyKey(idempotencyKey);
+        debitTxn.setCategory(TransactionClassifier.classify(debitTxn.getDescription(), debitTxn.getTransactionType()));
 
         transactionRepository.save(debitTxn);
         fraudDetectionService.analyze(debitTxn);   // 🔍 Fraud check on sender
@@ -234,6 +249,7 @@ public class TransactionService {
         creditTxn.setAmount(amount);
         creditTxn.setBalanceAfter(receiver.getBalance());
         creditTxn.setDescription("Received from " + fromAccountNumber);
+        creditTxn.setCategory(TransactionClassifier.classify(creditTxn.getDescription(), creditTxn.getTransactionType()));
 
         transactionRepository.save(creditTxn);
 
@@ -245,6 +261,11 @@ public class TransactionService {
                 "Money Received 💰",
                 "₹" + amount + " received from " + fromAccountNumber,
                 "TRANSACTION");
+
+        // 📱 SMS Alerts for both parties
+        smsService.sendTransferDebitAlert(sender, toAccountNumber, amount, sender.getBalance(), debitTxn.getId());
+        smsService.sendTransferCreditAlert(receiver, fromAccountNumber, amount, receiver.getBalance(), creditTxn.getId());
+
         String ip = RequestUtil.getClientIp();
         auditLogService.log(username, "TRANSFER", "TRANSACTION",
                 debitTxn.getId(), "Transferred ₹" + amount + " to " + toAccountNumber, ip, "SUCCESS");
@@ -286,18 +307,149 @@ public class TransactionService {
                         tx.getBalanceAfter(),
                         tx.getTransactionType(),
                         tx.getDescription(),
+                        tx.getCategory() != null ? tx.getCategory() : "OTHERS",
                         tx.getCreatedAt()
                 ));
     }
 
 
 
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(TransactionService.class);
+
     public Page<TransactionResponse> getAllTransactions(int page, int size) {
         Pageable pageable = PageRequest.of(page, size, Sort.by("createdAt").descending());
         return transactionRepository.getAllTransactionsWithAccountNumber(pageable);
     }
 
+    @Transactional
+    public void backfillMissingCategories(List<Long> accountIds) {
+        try {
+            boolean updatedAny = false;
+            for (Long accountId : accountIds) {
+                List<Transaction> txs = transactionRepository.findByAccountId(accountId);
+                for (Transaction tx : txs) {
+                    if (tx.getCategory() == null || tx.getCategory().isBlank()) {
+                        tx.setCategory(TransactionClassifier.classify(tx.getDescription(), tx.getTransactionType()));
+                        transactionRepository.save(tx);
+                        updatedAny = true;
+                    }
+                }
+            }
+            if (updatedAny) {
+                log.info("Backfilled missing categories for accounts: {}", accountIds);
+            }
+        } catch (Exception e) {
+            log.error("Failed to backfill categories: ", e);
+        }
+    }
 
+    public java.util.Map<String, Object> getSpendingInsights(String email) {
+        User user = userRepository.findByEmail(email)
+                .orElseThrow(() -> new RuntimeException("User not found"));
+        List<Account> accounts = accountRepository.findAllByUserId(user.getId());
+        List<Long> accountIds = new java.util.ArrayList<>();
+        for (Account acc : accounts) {
+            accountIds.add(acc.getId());
+        }
 
+        // Auto backfill missing historical categories first
+        if (!accountIds.isEmpty()) {
+            backfillMissingCategories(accountIds);
+        }
 
+        java.time.LocalDateTime now = java.time.LocalDateTime.now();
+        java.time.LocalDateTime startOfCurrentMonth = now.withDayOfMonth(1).withHour(0).withMinute(0).withSecond(0).withNano(0);
+        java.time.LocalDateTime startOfPreviousMonth = startOfCurrentMonth.minusMonths(1);
+
+        List<Transaction> currentMonthTx = new java.util.ArrayList<>();
+        List<Transaction> previousMonthTx = new java.util.ArrayList<>();
+
+        if (!accountIds.isEmpty()) {
+            currentMonthTx = transactionRepository.findByAccountIdInAndCreatedAtAfter(accountIds, startOfCurrentMonth);
+            previousMonthTx = transactionRepository.findByAccountIdInAndCreatedAtAfter(accountIds, startOfPreviousMonth);
+        }
+
+        // 1. Compute Category Sums for current month (excluding INCOME and TRANSFER_CREDIT/DEPOSIT for pure spending)
+        java.util.Map<String, BigDecimal> currentCategoryBreakdown = new java.util.HashMap<>();
+        BigDecimal currentTotalSpending = BigDecimal.ZERO;
+
+        for (Transaction tx : currentMonthTx) {
+            String category = tx.getCategory() != null ? tx.getCategory() : "OTHERS";
+            // Pure spending means we ignore INCOME deposits, transfers credited
+            if ("INCOME".equals(category) || "DEPOSIT".equalsIgnoreCase(tx.getTransactionType()) || "TRANSFER_CREDIT".equalsIgnoreCase(tx.getTransactionType())) {
+                continue;
+            }
+            BigDecimal amt = tx.getAmount() != null ? tx.getAmount() : BigDecimal.ZERO;
+            currentCategoryBreakdown.put(category, currentCategoryBreakdown.getOrDefault(category, BigDecimal.ZERO).add(amt));
+            currentTotalSpending = currentTotalSpending.add(amt);
+        }
+
+        // 2. Compute Previous Month Total Spending (excluding INCOME)
+        BigDecimal previousTotalSpending = BigDecimal.ZERO;
+        for (Transaction tx : previousMonthTx) {
+            // Filter only previous month transactions before current month started
+            if (tx.getCreatedAt().isAfter(startOfCurrentMonth)) {
+                continue;
+            }
+            String category = tx.getCategory() != null ? tx.getCategory() : "OTHERS";
+            if ("INCOME".equals(category) || "DEPOSIT".equalsIgnoreCase(tx.getTransactionType()) || "TRANSFER_CREDIT".equalsIgnoreCase(tx.getTransactionType())) {
+                continue;
+            }
+            BigDecimal amt = tx.getAmount() != null ? tx.getAmount() : BigDecimal.ZERO;
+            previousTotalSpending = previousTotalSpending.add(amt);
+        }
+
+        // 3. Format Category list for Chart consumption
+        List<java.util.Map<String, Object>> categoriesList = new java.util.ArrayList<>();
+        for (java.util.Map.Entry<String, BigDecimal> entry : currentCategoryBreakdown.entrySet()) {
+            java.util.Map<String, Object> categoryMap = new java.util.HashMap<>();
+            categoryMap.put("key", entry.getKey());
+            categoryMap.put("name", formatCategoryName(entry.getKey()));
+            categoryMap.put("value", entry.getValue());
+            categoriesList.add(categoryMap);
+        }
+
+        // Sort categories by highest spent value first
+        categoriesList.sort((a, b) -> ((BigDecimal) b.get("value")).compareTo((BigDecimal) a.get("value")));
+
+        // 4. Calculate month over month variance percent
+        double variancePercentage = 0.0;
+        if (previousTotalSpending.compareTo(BigDecimal.ZERO) > 0) {
+            BigDecimal diff = currentTotalSpending.subtract(previousTotalSpending);
+            variancePercentage = diff.doubleValue() / previousTotalSpending.doubleValue() * 100.0;
+        }
+
+        java.util.Map<String, Object> insights = new java.util.HashMap<>();
+        insights.put("categories", categoriesList);
+        insights.put("currentMonthTotal", currentTotalSpending);
+        insights.put("previousMonthTotal", previousTotalSpending);
+        insights.put("variancePercentage", variancePercentage);
+        insights.put("categoryBreakdown", currentCategoryBreakdown);
+
+        return insights;
+    }
+
+    private String formatCategoryName(String rawKey) {
+        if (rawKey == null) return "Others";
+        switch (rawKey) {
+            case "FOOD_DINING": return "Food & Dining";
+            case "ENTERTAINMENT": return "Entertainment";
+            case "SHOPPING": return "Shopping";
+            case "TRAVEL_TRANSPORT": return "Travel & Transport";
+            case "UTILITIES_BILLS": return "Utilities & Bills";
+            case "INCOME": return "Income";
+            case "OTHERS": return "Others";
+            default:
+                String[] parts = rawKey.split("_");
+                java.lang.StringBuilder sb = new java.lang.StringBuilder();
+                for (String part : parts) {
+                    if (part.length() > 0) {
+                        sb.append(Character.toUpperCase(part.charAt(0)))
+                          .append(part.substring(1).toLowerCase())
+                          .append(" ");
+                    }
+                }
+                return sb.toString().trim();
+        }
+    }
 }

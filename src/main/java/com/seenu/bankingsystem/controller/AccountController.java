@@ -3,9 +3,13 @@ package com.seenu.bankingsystem.controller;
 import com.seenu.bankingsystem.dto.AccountResponse;
 import com.seenu.bankingsystem.dto.BalanceResponse;
 import com.seenu.bankingsystem.entity.Account;
+import com.seenu.bankingsystem.entity.User;
+import com.seenu.bankingsystem.repository.UserRepository;
 import com.seenu.bankingsystem.service.AccountService;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.web.bind.annotation.*;
 
 import java.math.BigDecimal;
@@ -17,6 +21,9 @@ public class AccountController {
 
     @Autowired
     private AccountService accountService;
+
+    @Autowired
+    private UserRepository userRepository;
 
     @PostMapping("/create")
     public Account createAccount(
@@ -31,7 +38,21 @@ public class AccountController {
 
     @GetMapping
     public List<AccountResponse> getAllAccounts() {
-        return accountService.getAllAccounts();
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+
+        // Check if the authenticated user is an ADMIN
+        boolean isAdmin = auth.getAuthorities().stream()
+                .anyMatch(a -> a.getAuthority().equals("ADMIN"));
+
+        if (isAdmin) {
+            return accountService.getAllAccounts();
+        }
+
+        // For regular users, return only their own accounts
+        String email = auth.getName();
+        User user = userRepository.findByEmail(email)
+                .orElseThrow(() -> new RuntimeException("User not found"));
+        return accountService.getAccountsByUserId(user.getId());
     }
 
     @GetMapping("/balance")

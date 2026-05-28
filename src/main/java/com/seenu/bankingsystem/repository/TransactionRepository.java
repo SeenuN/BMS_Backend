@@ -50,6 +50,7 @@ public interface TransactionRepository extends JpaRepository<Transaction, Long> 
         t.balanceAfter,
         t.transactionType,
         t.description,
+        COALESCE(t.category, 'OTHERS'),
         t.createdAt
     )
     FROM Transaction t
@@ -57,4 +58,5 @@ public interface TransactionRepository extends JpaRepository<Transaction, Long> 
 """)
     Page<TransactionResponse> getAllTransactionsWithAccountNumber(Pageable pageable);
 
+    List<Transaction> findByAccountIdInAndCreatedAtAfter(List<Long> accountIds, LocalDateTime after);
 }

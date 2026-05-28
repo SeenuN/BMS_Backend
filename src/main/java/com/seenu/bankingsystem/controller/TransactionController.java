@@ -60,11 +60,15 @@ public class TransactionController {
 
     @GetMapping
     public Page<TransactionResponse> getAllTransactions(
-            @RequestParam(defaultValue = "0") int page,
-            @RequestParam(defaultValue = "5") int size
+        @RequestParam(defaultValue = "0") int page,
+        @RequestParam(defaultValue = "5") int size
     ) {
         return transactionService.getAllTransactions(page, size);
     }
 
-
+    @GetMapping("/insights")
+    public java.util.Map<String, Object> getInsights() {
+        String username = org.springframework.security.core.context.SecurityContextHolder.getContext().getAuthentication().getName();
+        return transactionService.getSpendingInsights(username);
+    }
 }

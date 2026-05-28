@@ -53,6 +53,10 @@ public class AccountService {
         return accountRepository.getAllAccountDetails();
     }
 
+    public List<AccountResponse> getAccountsByUserId(Long userId) {
+        return accountRepository.getAccountDetailsByUserId(userId);
+    }
+
     /** Freeze an account — no transactions allowed while FROZEN. */
     public Account freezeAccount(String accountNumber, String adminUsername) {
         Account account = accountRepository
